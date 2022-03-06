@@ -13,26 +13,27 @@ defmodule Ueberauth.Strategy.LinkedIn do
   alias Ueberauth.Auth.Credentials
   alias Ueberauth.Auth.Extra
 
-  @state_cookie_name "ueberauth_linkedin_state"
-
   @doc """
   Handles initial request for LinkedIn authentication.
   """
   def handle_request!(conn) do
     scopes = conn.params["scope"] || option(conn, :default_scope)
-    state = conn.params["state"] || Base.encode64(:crypto.strong_rand_bytes(16))
 
-    opts = [scope: scopes, state: state, redirect_uri: callback_url(conn)]
+    opts = [scope: scopes, redirect_uri: callback_url(conn), response_type: "code"]
 
-    conn
-    |> put_resp_cookie(@state_cookie_name, state)
-    |> redirect!(Ueberauth.Strategy.LinkedIn.OAuth.authorize_url!(opts))
+    opts =
+      if state = conn.private[:ueberauth_state_param],
+        do: Keyword.put(opts, :state, state),
+        else: opts
+
+    redirect!(conn, Ueberauth.Strategy.LinkedIn.OAuth.authorize_url!(opts))
   end
 
   @doc """
   Handles the callback from LinkedIn.
   """
-  def handle_callback!(%Plug.Conn{params: %{"code" => code, "state" => state}} = conn) do
+  def handle_callback!(%Plug.Conn{params: %{"code" => code}} = conn) do
+    IO.inspect(conn, label: :success)
     opts = [redirect_uri: callback_url(conn)]
 
     %OAuth2.Client{token: token} =
@@ -42,28 +43,18 @@ defmodule Ueberauth.Strategy.LinkedIn do
       token_error = token.other_params["error"]
       token_error_description = token.other_params["error_description"]
 
-      conn
-      |> delete_resp_cookie(@state_cookie_name)
-      |> set_errors!([error(token_error, token_error_description)])
+      set_errors!(conn, [error(token_error, token_error_description)])
     else
-      if conn.cookies[@state_cookie_name] == state do
-        conn
-        |> delete_resp_cookie(@state_cookie_name)
-        |> fetch_user(token)
-        |> fetch_primary_contact()
-      else
-        conn
-        |> delete_resp_cookie(@state_cookie_name)
-        |> set_errors!([error("csrf", "CSRF token mismatch")])
-      end
+      conn
+      |> fetch_user(token)
+      |> fetch_primary_contact()
     end
   end
 
   @doc false
   def handle_callback!(conn) do
-    conn
-    |> delete_resp_cookie(@state_cookie_name)
-    |> set_errors!([error("missing_code", "No code received")])
+    IO.inspect(conn, label: :fail)
+    set_errors!(conn, [error("missing_code", "No code received")])
   end
 
   @doc false
